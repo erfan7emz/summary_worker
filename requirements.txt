@@ -1,0 +1,5 @@
+celery[redis]
+psycopg2-binary
+requests
+python-dateutil
+redis
