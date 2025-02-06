@@ -89,6 +89,7 @@ celery_app.conf.update(
                 autoretry_for=(Exception,),
                 retry_backoff=True,
                 retry_backoff_max=600)
+
 def process_file(self, file_id: int, file_url: str, opportunity_id: int):
     """Celery task to process a single file"""
     logger.info(f"Processing file {file_id}")
@@ -98,7 +99,7 @@ def process_file(self, file_id: int, file_url: str, opportunity_id: int):
         api_url = 'https://summary-summarizer.azurewebsites.net/summarize_attachment'
         payload = {'file_url': file_url}
         
-        response = requests.post(api_url, json=payload, timeout=30)
+        response = requests.post(api_url, json=payload, timeout=300)
         response.raise_for_status()
         
         summary = response.json().get('summary')
@@ -138,8 +139,9 @@ def process_file(self, file_id: int, file_url: str, opportunity_id: int):
                         cur.execute("""
                             UPDATE resource_links 
                             SET status = 'pending'
+                                    error_message = %s
                             WHERE id = %s
-                        """, (file_id,))
+                        """, (str(e), file_id,))
                     conn.commit()
         except Exception as db_error:
             logger.error(f"Error updating database for file {file_id}: {str(db_error)}")
