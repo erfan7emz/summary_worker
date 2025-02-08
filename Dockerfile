@@ -25,4 +25,4 @@ HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
     CMD celery -A worker inspect ping || exit 1
 
 # Command to run worker
-CMD ["celery", "-A", "worker", "worker", "--loglevel=INFO"]
+CMD ["celery", "-A", "worker", "worker", "--loglevel=INFO", "--time-limit=300"]

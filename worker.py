@@ -74,6 +74,7 @@ celery_app.conf.update(
     task_acks_late=True,
     task_reject_on_worker_lost=True,
     task_default_rate_limit='10/m',
+    task_time_limit=300,
     
     # Connection recovery settings
     broker_connection_backoff=3,
@@ -84,15 +85,12 @@ celery_app.conf.update(
 )
 
 @celery_app.task(bind=True, 
-                max_retries=3,
                 rate_limit='10/m',
-                autoretry_for=(Exception,),
-                retry_backoff=True,
-                retry_backoff_max=600)
-
+                time_limit=310,
+                soft_time_limit=300)  # Removed retry-related parameters since we'll handle it ourselves
 def process_file(self, file_id: int, file_url: str, opportunity_id: int):
     """Celery task to process a single file"""
-    logger.info(f"Processing file {file_id}")
+    logger.info(f"Processing KOSSSS file {file_id}")
     
     try:
         # Make request to summary generation service
@@ -127,7 +125,16 @@ def process_file(self, file_id: int, file_url: str, opportunity_id: int):
         try:
             with psycopg2.connect(os.getenv('DATABASE_URL')) as conn:
                 with conn.cursor() as cur:
-                    if self.request.retries >= self.max_retries:
+                    # First get current retry count
+                    cur.execute("""
+                        SELECT retry_count 
+                        FROM resource_links 
+                        WHERE id = %s
+                    """, (file_id,))
+                    result = cur.fetchone()
+                    retry_count = (result[0] or 0) if result else 0
+                    
+                    if retry_count >= 2:  # Max 3 attempts (initial + 2 retries)
                         cur.execute("""
                             UPDATE resource_links 
                             SET status = 'failed',
@@ -135,18 +142,22 @@ def process_file(self, file_id: int, file_url: str, opportunity_id: int):
                                 processed_at = NOW()
                             WHERE id = %s
                         """, (str(e), file_id))
+                        logger.error(f"File {file_id} failed after {retry_count + 1} attempts")
                     else:
+                        # Increment retry count and keep status as pending
                         cur.execute("""
                             UPDATE resource_links 
-                            SET status = 'pending'
-                                    error_message = %s
+                            SET status = 'pending',
+                                error_message = %s,
+                                retry_count = retry_count + 1
                             WHERE id = %s
-                        """, (str(e), file_id,))
+                        """, (str(e), file_id))
+                        logger.info(f"File {file_id} scheduled for retry {retry_count + 1}/3")
                     conn.commit()
         except Exception as db_error:
             logger.error(f"Error updating database for file {file_id}: {str(db_error)}")
         
-        raise self.retry(exc=e)
+        raise  # Raise the exception to mark the task as failed
 
 if __name__ == '__main__':
     celery_app.start()
